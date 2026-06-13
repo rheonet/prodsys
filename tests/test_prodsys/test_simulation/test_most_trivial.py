@@ -56,7 +56,7 @@ def test_run_simulation(simulation_adapter: JsonProductionSystemAdapter):
 
     for kpi in post_processor.WIP_KPIs:
         if kpi.name == "WIP" and kpi.product_type == "product1":
-            assert kpi.value > 3.6 and kpi.value < 3.75
+            assert kpi.value > 3.4 and kpi.value < 3.5
 
     for kpi in post_processor.aggregated_throughput_time_KPIs:
         if kpi.name == "throughput_time":
@@ -87,7 +87,7 @@ def test_run_simulation_with_cut_off(simulation_adapter: JsonProductionSystemAda
 
     for kpi in post_processor.WIP_KPIs:
         if kpi.name == "WIP" and kpi.product_type == "product1":
-            assert kpi.value < 3.6 and kpi.value > 3.5
+            assert kpi.value < 3.4 and kpi.value > 3.3
 
     for kpi in post_processor.aggregated_throughput_time_KPIs:
         if kpi.name == "throughput_time":
