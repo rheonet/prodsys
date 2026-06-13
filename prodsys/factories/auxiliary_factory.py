@@ -97,11 +97,11 @@ class AuxiliaryFactory(BaseModel):
         values.update({"relevant_transport_processes": relevant_transport_processes})
         storage_from_queue_data = self.queue_factory.get_queue(storage.ID)
         values.update({"storage": storage_from_queue_data})
-        router = self.get_router(
+        auxiliary_router = self.get_router(
             source_data.RoutingHeuristic.FIFO
         )  # Add the routing_heuristic in auxiliary_data, like in source_data
         auxiliary_object = auxiliary.Auxiliary.model_validate(values)
-        auxiliary_object.auxiliary_router = router
+        auxiliary_object.auxiliary_router = auxiliary_router
         auxiliary_object.current_locatable = storage_from_queue_data
         auxiliary_object.init_got_free()
 

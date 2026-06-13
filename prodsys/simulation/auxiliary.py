@@ -305,4 +305,4 @@ class Auxiliary(BaseModel):
         )
 
 
-from prodsys.simulation import product
+from prodsys.simulation import product, resources, router, sink, source

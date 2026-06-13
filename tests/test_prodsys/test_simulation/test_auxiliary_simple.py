@@ -76,18 +76,18 @@ def test_run_simulation(simulation_adapter: JsonProductionSystemAdapter):
             assert kpi.value < 90 and kpi.value > 88
 
         if kpi.name == "productive_time" and kpi.resource == "transport":
-            assert kpi.value > 53 and kpi.value < 55
+            assert kpi.value > 52 and kpi.value < 55
         if kpi.name == "productive_time" and kpi.resource == "transport2":
             assert kpi.value > 53 and kpi.value < 55
 
     for kpi in post_processor.WIP_KPIs:
         if kpi.name == "WIP" and kpi.product_type == "product1":
-            assert kpi.value < 5.7 and kpi.value > 5.6
+            assert kpi.value < 5.5 and kpi.value > 5.3
 
     for kpi in post_processor.auxiliary_WIP_KPIs:
         if kpi.name == "AUXILIARY_WIP" and kpi.product_type == "auxiliary1":
-            assert kpi.value < 6.2 and kpi.value > 6.1
+            assert kpi.value < 6.1 and kpi.value > 5.9
 
     for kpi in post_processor.aggregated_throughput_time_KPIs:
         if kpi.name == "throughput_time":
-            assert kpi.value < 5.1 and kpi.value > 5.0
+            assert kpi.value < 5.0 and kpi.value > 4.8

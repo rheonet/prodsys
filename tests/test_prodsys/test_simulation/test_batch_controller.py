@@ -51,7 +51,7 @@ def test_run_simulation(batch_simulation_adapter: JsonProductionSystemAdapter):
     for kpi in post_processor.throughput_and_output_KPIs:
         if kpi.name == "output":
             assert kpi.product_type == "product1"
-            assert kpi.value > 1930 and kpi.value < 1940
+            assert kpi.value > 1945 and kpi.value < 1955
     for kpi in post_processor.machine_state_KPIS:
         if kpi.name == "productive_time" and kpi.resource == "machine":
             assert kpi.value < 41 and kpi.value > 39
@@ -61,7 +61,7 @@ def test_run_simulation(batch_simulation_adapter: JsonProductionSystemAdapter):
 
     for kpi in post_processor.WIP_KPIs:
         if kpi.name == "WIP" and kpi.product_type == "product1":
-            assert kpi.value < 2.95 and kpi.value > 2.8
+            assert kpi.value < 2.7 and kpi.value > 2.5
 
     for kpi in post_processor.aggregated_throughput_time_KPIs:
         if kpi.name == "throughput_time":

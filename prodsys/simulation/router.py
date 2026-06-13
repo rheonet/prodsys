@@ -425,6 +425,8 @@ class Router:
             bool: If the product is stored in the store.
         """
         resource = product.current_locatable
+        if not isinstance(resource, resources.ProductionResource):
+            return False
         external_queues = [
             queue for queue in resource.output_queues if isinstance(queue, store.Store)
         ]
