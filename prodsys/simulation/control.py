@@ -162,18 +162,30 @@ class Controller(ABC, BaseModel):
             if not isinstance(queue, store.Store)
         ]
 
+    def get_store_output_queues(
+        self, resource: resources.Resource
+    ) -> List[store.Queue]:
+        if not isinstance(resource, resources.ProductionResource):
+            return []
+        return [
+            queue for queue in resource.output_queues if isinstance(queue, store.Store)
+        ]
+
+    def get_output_queues(self, resource: resources.Resource) -> List[store.Queue]:
+        return self.get_internal_output_queues(
+            resource
+        ) + self.get_store_output_queues(resource)
+
     def get_output_queue_state_change_events(
         self, resource: resources.Resource
     ) -> List[events.Event]:
-        return [
-            queue.state_change for queue in self.get_internal_output_queues(resource)
-        ]
+        return [queue.state_change for queue in self.get_output_queues(resource)]
 
     def has_output_queue_capacity(
         self, resource: resources.Resource, required_slots: int = 1
     ) -> bool:
         available_slots = 0
-        for queue in self.get_internal_output_queues(resource):
+        for queue in self.get_output_queues(resource):
             if queue.capacity == float("inf"):
                 return True
             available_slots += max(
@@ -188,11 +200,17 @@ class Controller(ABC, BaseModel):
     ) -> List[store.Queue]:
         reserved_queues: List[store.Queue] = []
         for _ in range(required_slots):
-            available_queues = [
+            available_internal_queues = [
                 queue
                 for queue in self.get_internal_output_queues(resource)
                 if not queue.full
             ]
+            available_store_queues = [
+                queue for queue in self.get_store_output_queues(resource) if not queue.full
+            ]
+            # Prefer the normal output queue. Stores act as explicit escape buffers
+            # for blocking-after-service layouts where the downstream buffer is full.
+            available_queues = available_internal_queues or available_store_queues
             if not available_queues:
                 for reserved_queue in reserved_queues:
                     reserved_queue.unreserve()
@@ -410,6 +428,9 @@ class ProductionController(Controller):
         yield self.env.timeout(0)
         process_request = self.requests.pop(0)
         self.reserved_requests_count -= 1
+        reserved_output_queues = getattr(
+            process_request, "reserved_output_queues", None
+        )
         resource = process_request.get_resource()
         process = process_request.get_process()
         product = process_request.get_product()
@@ -455,7 +476,7 @@ class ProductionController(Controller):
             product_put_events = self.put_product_to_output_queue(
                 resource,
                 [product],
-                getattr(process_request, "reserved_output_queues", None),
+                reserved_output_queues,
             )
             logger.debug(
                 {
@@ -466,6 +487,10 @@ class ProductionController(Controller):
                 }
             )
             yield events.AllOf(resource.env, product_put_events)
+            if reserved_output_queues and isinstance(
+                reserved_output_queues[0], store.Store
+            ):
+                product.update_location(reserved_output_queues[0])
 
             for next_product in [product]:
                 if not resource.got_free.triggered:
@@ -771,6 +796,9 @@ class BatchController(Controller):
         yield self.env.timeout(0)
         process_request = self.requests.pop(0)
         self.reserved_requests_count -= 1
+        reserved_output_queues = getattr(
+            process_request, "reserved_output_queues", None
+        )
         resource = process_request.get_resource()
         process = process_request.get_process()
         product = process_request.get_product()
@@ -831,7 +859,7 @@ class BatchController(Controller):
             product_put_events = self.put_product_to_output_queue(
                 resource,
                 products,
-                getattr(process_request, "reserved_output_queues", None),
+                reserved_output_queues,
             )
             logger.debug(
                 {
@@ -842,6 +870,10 @@ class BatchController(Controller):
                 }
             )
             yield events.AllOf(resource.env, product_put_events)
+            if reserved_output_queues:
+                for product, output_queue in zip(products, reserved_output_queues):
+                    if isinstance(output_queue, store.Store):
+                        product.update_location(output_queue)
 
             for product in products:
                 for next_product in [product]:
