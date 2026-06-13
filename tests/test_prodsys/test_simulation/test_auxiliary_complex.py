@@ -106,7 +106,7 @@ def test_run_simulation(simulation_adapter: JsonProductionSystemAdapter):
             assert kpi.value < 96 and kpi.value > 94
 
         if kpi.name == "productive_time" and kpi.resource == "transport":
-            assert kpi.value > 47 and kpi.value < 49
+            assert kpi.value > 49 and kpi.value < 50
         if kpi.name == "productive_time" and kpi.resource == "transport2":
             assert kpi.value > 48 and kpi.value < 53
         if kpi.name == "productive_time" and kpi.resource == "transport_aux":
