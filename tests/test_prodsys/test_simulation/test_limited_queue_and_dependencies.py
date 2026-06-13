@@ -6,6 +6,11 @@ from prodsys.models import queue_data
 from prodsys.simulation import sim, store
 
 
+def _run_event(env: sim.Environment, event) -> None:
+    while not event.processed:
+        env.step()
+
+
 def test_reserved_queue_slot_is_released_after_successful_put():
     env = sim.Environment()
     queue = store.Queue(
@@ -19,7 +24,7 @@ def test_reserved_queue_slot_is_released_after_successful_put():
     assert queue.full
     assert queue._pending_put == 1
 
-    env.run(put_event)
+    _run_event(env, put_event)
 
     assert queue.items == ["product"]
     assert queue._pending_put == 0
@@ -30,7 +35,7 @@ def test_reserved_queue_slot_is_released_after_successful_put():
 
     assert queue._pending_put == 0
 
-    env.run(queue.get(lambda item: item == "product"))
+    _run_event(env, queue.get(lambda item: item == "product"))
 
     assert not queue.full
     assert queue._pending_put == 0
@@ -67,15 +72,18 @@ def test_precedence_dependencies_work_with_link_transport_and_limited_queues():
         processes=[link_transport], location=[0, 0], ID="agv"
     )
 
-    product = psx.Product(
+    product_type = psx.Product(
         processes=[process_1, process_2, process_3],
         transport_process=link_transport,
         ID="product",
     )
     source = psx.Source(
-        product=product, time_model=time_model_source, location=[-10, 0], ID="source"
+        product=product_type,
+        time_model=time_model_source,
+        location=[-10, 0],
+        ID="source",
     )
-    sink = psx.Sink(product=product, location=[30, 0], ID="sink")
+    sink = psx.Sink(product=product_type, location=[30, 0], ID="sink")
 
     link_transport.set_links(
         [
