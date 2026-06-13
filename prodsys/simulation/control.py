@@ -151,6 +151,57 @@ class Controller(ABC, BaseModel):
                 ],
             )
 
+    def get_internal_output_queues(
+        self, resource: resources.Resource
+    ) -> List[store.Queue]:
+        if not isinstance(resource, resources.ProductionResource):
+            return []
+        return [
+            queue
+            for queue in resource.output_queues
+            if not isinstance(queue, store.Store)
+        ]
+
+    def get_output_queue_state_change_events(
+        self, resource: resources.Resource
+    ) -> List[events.Event]:
+        return [
+            queue.state_change for queue in self.get_internal_output_queues(resource)
+        ]
+
+    def has_output_queue_capacity(
+        self, resource: resources.Resource, required_slots: int = 1
+    ) -> bool:
+        available_slots = 0
+        for queue in self.get_internal_output_queues(resource):
+            if queue.capacity == float("inf"):
+                return True
+            available_slots += max(
+                int(queue.capacity - queue._pending_put - len(queue.items)), 0
+            )
+            if available_slots >= required_slots:
+                return True
+        return available_slots >= required_slots
+
+    def reserve_output_queues(
+        self, resource: resources.Resource, required_slots: int = 1
+    ) -> List[store.Queue]:
+        reserved_queues: List[store.Queue] = []
+        for _ in range(required_slots):
+            available_queues = [
+                queue
+                for queue in self.get_internal_output_queues(resource)
+                if not queue.full
+            ]
+            if not available_queues:
+                for reserved_queue in reserved_queues:
+                    reserved_queue.unreserve()
+                raise RuntimeError("No output queue capacity available.")
+            selected_queue = random.choice(available_queues)
+            selected_queue.reserve()
+            reserved_queues.append(selected_queue)
+        return reserved_queues
+
     @abstractmethod
     def control_loop(self) -> None:
         """
@@ -227,7 +278,10 @@ class ProductionController(Controller):
             raise ValueError("Resource is not a ProductionResource")
 
     def put_product_to_output_queue(
-        self, resource: resources.Resource, products: List[product.Product]
+        self,
+        resource: resources.Resource,
+        products: List[product.Product],
+        reserved_output_queues: Optional[List[store.Queue]] = None,
     ):
         """
         Place a product to the output queue (put) of the resource.
@@ -241,14 +295,11 @@ class ProductionController(Controller):
         """
         events = []
         if isinstance(resource, resources.ProductionResource):
-            for product in products:
-                queue_for_product = None
-                internal_queues = [
-                    queue
-                    for queue in resource.output_queues
-                    if not isinstance(queue, store.Store)
-                ]
-                queue_for_product = random.choice(internal_queues)
+            if reserved_output_queues is None:
+                reserved_output_queues = self.reserve_output_queues(
+                    resource, len(products)
+                )
+            for product, queue_for_product in zip(products, reserved_output_queues):
                 events.append(queue_for_product.put(product.product_data))
                 logger.debug(
                     {
@@ -291,28 +342,36 @@ class ProductionController(Controller):
             if self.resource.requires_charging:
                 yield self.env.process(self.resource.charge())
             yield events.AnyOf(
-                env=self.env, events=self.running_processes + [self.requested]
+                env=self.env,
+                events=self.running_processes
+                + [self.requested]
+                + self.get_output_queue_state_change_events(self.resource),
             )
             if self.requested.triggered:
                 self.requested = events.Event(self.env)
             for process in self.running_processes:
                 if not process.is_alive:
                     self.running_processes.remove(process)
+            output_queues_full = not self.has_output_queue_capacity(self.resource)
             if (
                 self.resource.full
                 or not self.requests
                 or self.reserved_requests_count == len(self.requests)
+                or output_queues_full
             ):
                 logger.debug(
                     {
                         "ID": "controller",
                         "sim_time": self.env.now,
                         "resource": self.resource.data.ID,
-                        "event": f"No request ({len(self.requests)}) or resource full ({self.resource.full}) or all requests reserved ({self.reserved_requests_count == len(self.requests)})",
+                        "event": f"No request ({len(self.requests)}) or resource full ({self.resource.full}) or all requests reserved ({self.reserved_requests_count == len(self.requests)}) or output queues full ({output_queues_full})",
                     }
                 )
                 continue
             self.control_policy(self.requests)
+            self.requests[0].reserved_output_queues = self.reserve_output_queues(
+                self.resource
+            )
             self.reserved_requests_count += 1
             running_process = self.env.process(self.start_process())
             self.running_processes.append(running_process)
@@ -393,7 +452,11 @@ class ProductionController(Controller):
             yield self.env.process(self.run_process(production_state, product, process))
             production_state.process = None
 
-            product_put_events = self.put_product_to_output_queue(resource, [product])
+            product_put_events = self.put_product_to_output_queue(
+                resource,
+                [product],
+                getattr(process_request, "reserved_output_queues", None),
+            )
             logger.debug(
                 {
                     "ID": "controller",
@@ -403,7 +466,6 @@ class ProductionController(Controller):
                 }
             )
             yield events.AllOf(resource.env, product_put_events)
-            resource.adjust_pending_put_of_output_queues()  # output queues do not get reserved, so the pending put has to be adjusted manually
 
             for next_product in [product]:
                 if not resource.got_free.triggered:
@@ -537,7 +599,10 @@ class BatchController(Controller):
             raise ValueError("Resource is not a ProductionResource")
 
     def put_product_to_output_queue(
-        self, resource: resources.Resource, products: List[product.Product]
+        self,
+        resource: resources.Resource,
+        products: List[product.Product],
+        reserved_output_queues: Optional[List[store.Queue]] = None,
     ) -> List[events.Event]:
         """
         Place a batch of products into the output queue of the resource.
@@ -551,13 +616,11 @@ class BatchController(Controller):
         """
         events = []
         if isinstance(resource, resources.ProductionResource):
-            for product in products:
-                internal_output_queues = [
-                    queue
-                    for queue in resource.output_queues
-                    if not isinstance(queue, store.Store)
-                ]
-                queue_for_product = random.choice(internal_output_queues)
+            if reserved_output_queues is None:
+                reserved_output_queues = self.reserve_output_queues(
+                    resource, len(products)
+                )
+            for product, queue_for_product in zip(products, reserved_output_queues):
                 events.append(queue_for_product.put(product.product_data))
                 logger.debug(
                     {
@@ -637,26 +700,38 @@ class BatchController(Controller):
                 }
             )
             yield events.AnyOf(
-                env=self.env, events=self.running_processes + [self.requested]
+                env=self.env,
+                events=self.running_processes
+                + [self.requested]
+                + self.get_output_queue_state_change_events(self.resource),
             )
             if self.requested.triggered:
                 self.requested = events.Event(self.env)
             for process in self.running_processes:
                 if not process.is_alive:
                     self.running_processes.remove(process)
-            if self.resource.full or (
-                len(self.requests) < batch_size and len(self.requests) > 0
+            output_queues_full = not self.has_output_queue_capacity(
+                self.resource, batch_size
+            )
+            if (
+                self.resource.full
+                or self.reserved_requests_count == len(self.requests)
+                or output_queues_full
+                or (len(self.requests) < batch_size and len(self.requests) > 0)
             ):
                 logger.debug(
                     {
                         "ID": "controller",
                         "sim_time": self.env.now,
                         "resource": self.resource.data.ID,
-                        "event": f"Not enough requests ({len(self.requests)}) or resource full ({self.resource.full})",
+                        "event": f"Not enough requests ({len(self.requests)}) or resource full ({self.resource.full}) or all requests reserved ({self.reserved_requests_count == len(self.requests)}) or output queues full ({output_queues_full})",
                     }
                 )
                 continue
             self.control_policy(self.requests)
+            self.requests[0].reserved_output_queues = self.reserve_output_queues(
+                self.resource, batch_size
+            )
             self.reserved_requests_count += 1
             running_process = self.env.process(self.start_process())
             self.running_processes.append(running_process)
@@ -753,7 +828,11 @@ class BatchController(Controller):
             for state in production_states:
                 state.process = None
 
-            product_put_events = self.put_product_to_output_queue(resource, products)
+            product_put_events = self.put_product_to_output_queue(
+                resource,
+                products,
+                getattr(process_request, "reserved_output_queues", None),
+            )
             logger.debug(
                 {
                     "ID": "controller",
@@ -763,9 +842,6 @@ class BatchController(Controller):
                 }
             )
             yield events.AllOf(resource.env, product_put_events)
-            resource.adjust_pending_put_of_output_queues(
-                batch_size
-            )  # output queues do not get reserved, so the pending put has to be adjusted manually
 
             for product in products:
                 for next_product in [product]:

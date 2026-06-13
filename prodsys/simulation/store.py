@@ -39,6 +39,14 @@ class Queue(store.FilterStore):
         super().__init__(env, capacity)
         self.state_change = self.env.event()
 
+    def _trigger_state_change(self) -> None:
+        """
+        Notify waiters that queue contents or reserved capacity changed.
+        """
+        if not self.state_change.triggered:
+            self.state_change.succeed()
+        self.state_change = self.env.event()
+
     def put(self, item) -> Generator:
         """
         Puts a product into the queue.
@@ -46,10 +54,14 @@ class Queue(store.FilterStore):
         Args:
             item (object): The product to be put into the queue.
         """
-        self.unreserve()
         return_event = super().put(item)
-        self.state_change.succeed()
-        self.state_change = self.env.event()
+
+        def mark_put_complete(_):
+            if self._pending_put > 0:
+                self.unreserve()
+            self._trigger_state_change()
+
+        return_event.callbacks.append(mark_put_complete)
         return return_event
 
     def get(self, filter) -> Generator:
@@ -63,8 +75,11 @@ class Queue(store.FilterStore):
             object: The product that was gotten from the queue.
         """
         item = super().get(filter=filter)
-        self.state_change.succeed()
-        self.state_change = self.env.event()
+
+        def mark_get_complete(_):
+            self._trigger_state_change()
+
+        item.callbacks.append(mark_get_complete)
         return item
 
     @property
@@ -91,6 +106,8 @@ class Queue(store.FilterStore):
         Raises:
             RuntimeError: If the queue is full.
         """
+        if self.full:
+            raise RuntimeError("Queue is full")
         self._pending_put += 1
         logger.debug(
             {
@@ -99,13 +116,13 @@ class Queue(store.FilterStore):
                 "event": f"reserving spot in queue {self.data.ID}, current level: {len(self.items)}, pendings: {self._pending_put}",
             }
         )
-        if self._pending_put + len(self.items) > self.capacity:
-            raise RuntimeError("Queue is full")
 
     def unreserve(self) -> None:
         """
         Unreserves a spot in the queue for a product to be put into after the put is completed.
         """
+        if self._pending_put <= 0:
+            return
         self._pending_put -= 1
 
 
