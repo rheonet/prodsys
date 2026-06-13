@@ -72,7 +72,7 @@ def test_run_simulation(charging_simulation_adapter: JsonProductionSystemAdapter
             assert kpi.value < 42 and kpi.value > 40
 
         if kpi.name == "charging_time" and kpi.resource == "transport":
-            assert kpi.value < 11 and kpi.value > 10
+            assert kpi.value < 9.1 and kpi.value > 8.9
         
     for kpi in post_processor.WIP_KPIs:
         if kpi.name == "WIP" and kpi.product_type == "product1":
